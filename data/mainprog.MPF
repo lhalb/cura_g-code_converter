@@ -1,8 +1,7 @@
-
 ;EBA_Cura
-;Version 1.02
-;Stand: 17.08.2021
-;Ersteller: Hengst
+;Version 1.03
+;Stand: 27.08.2021
+;Ersteller: Halbauer
 
 ;-------------Programmhinweise-----------------
 ;Programmcode geht vom Modellmittelpunkt aus 
@@ -12,32 +11,44 @@
 ;Downslope ohne Z-Verfahrbefehl
 
 ;-------------Definitionsbereich---------------
+
+; Macht die Subroutine "PATHCODE" mit einer INT-Variablen als 
+; Uebergabeparameter erreichbar
+EXTERN PATHCODE (STRING[12])
+
 DEF REAL _SLoff, _v, _UpS, _DoS, _vD ,_Hd, _XSTART, _YSTART 
-DEF REAL _ZSTART, _ZDSTART, _SQb, _vs, _Rueck, _DRueck, _tups, _tdos
-DEF INT  _KWH
+DEF REAL _ZSTART, _ZDSTART, _SQb, _vs, _Rueck, _DRueck, _tups, _tdos, _dZ
+DEF INT  _KWH, _LAYER_ANZ
+DEF STRING[8] _LAB = "EB_PATH_"
+DEF STRING[12] _DEST
+
 
 DEF BOOL _POSITIONIEREN = 1        ;1 = Positionierung nutzen
-;_Layer = 0                        ;0 Neustart, 1,2,... Start bei Layer n
-;ist noch nicht implementiert
+DEF INT _START_Layer = 1                        ;0 Neustart, 1,2,... Start bei Layer n
+; ist noch nicht implementiert
 
-;=================== Prozessparameter ======================
-;EB-Parameter
-_SQH = 45           ;Strahlstrom  Behandlung [mA]
-_SLH = 1650          ;Linsenstrom  Behandlung [mA]
-_SLoff = 0           ;Linsenoffset Behandlung [mA]
-_vs   = 15           ;wird nicht verwendet!!! Vorschubgeschwindigkeit [mm/s]
-_SWXs= 1             ;Feldgroesse X
-_SWYs= 1             ;Feldgroesse Y
-_UpS = 0             ;Upslope [mm]
-_DoS = 0             ;Downslope [mm]
-_tups= 0.25          ;Ausgleichzeit Upslope [s]
-_tdos= 0.25          ;Ausgleichzeit Downslope [s]
+; =================== Prozessparameter ======================
+; EB-Parameter
+_SQH = 45            ; Strahlstrom  Behandlung [mA]
+_SLH = 1650          ; Linsenstrom  Behandlung [mA]
+_SLoff = 0           ; Linsenoffset Behandlung [mA]
+_vs   = 15           ; Vorschubgeschwindigkeit [mm/s]
+_SWXs= 2             ; Feldgroesse X
+_SWYs= 2             ; Feldgroesse Y
+_UpS = 0             ; Upslope [mm]
+_DoS = 0             ; Downslope [mm]
+_tups= 0.25          ; Ausgleichzeit Upslope [s]
+_tdos= 0.25          ; Ausgleichzeit Downslope [s]
+
+; Lagenparameter
+_LAYER_ANZ = 1       ; Anzahl der anzufertigenden Layer
+_dZ = -1.5           ; Lagenhoehe [mm]
+
 
 ;Draht-Parameter
 _Hd  = 0.8            ;Hoehedifferenz von Lage zu Lage [mm]
 _vD  = 2.5              ;Vorschubges. Draht [m/min]
 _DRueck = 4           ;Drahtrückzug in [mm] ueber _vD berechnet
-
 _Rueck = (_DRueck/1000)/(_vD*60)  
 
 ;Beobachten-Parameter
@@ -49,56 +60,64 @@ _KWH = 3425           ;Kalibrierwert
 _HV = 60              ;Hochspannung [kV]
 _FP = 20              ;Positionierungsgeschwindigkeit [mm/s]
 
-;=================== Hauptprogramm ======================
+;=================== START Hauptprogramm ======================
 INITIAL
 KALWERT(_KWH)
 
-;-- Abarbeiten der Layer--
-;FOR _LAYERZAHL = 1 TO _LAYER
-;REPEAT Layer"<<_TEILE<<"
-;ENDFOR
+FOR _LAGE = _START_Layer TO _LAYER_ANZ
+  ; ELO aufrufen
+  IF _POSITIONIEREN
+    REPEAT POSITIONIEREN ENDLABEL
+  ENDIF
+  ; Strahlfigur laden
+  REPEAT VORBEREITUNG ENDLABEL
+  ; Sprungziel definieren
+  _DEST = _LAB << "_LAGE"
+  PATHCODE (_DEST)
+ENDFOR
+
+M02
+
+; ====================== ENDE Hauptprogramm ===================
 
 
 
 ;-------Positionierung des Modelmittelpunktes------------
-IF _POSITIONIEREN == 1
+POSITIONIEREN:
+  MSG("Mittelpunkt anfahren und [Cycle Start] druecken!")
+  WRT (B_SWX,30, Auff,1)
+  SNS
 
-MSG("Mittelpunkt des Modells positionieren und [Cycle Start] druecken!")
-WRT (B_SWX,20,B_SL,_SLb,Auff,1)
-SNS
+  COPY_SW(B_SWX, B_SWY)
 
-ELO_EIN(22)
-G4 F0.5
-G0 SQ _SQb) SL _SLb)
+  ELO_EIN(22)
+  G4 F0.5
+  G0 SQ _SQb) SL _SLb)
 
-HDWS_X
-HDWS_Y
-MSG()
+  HDWS_X
+  HDWS_Y
 
-SQ 0)
-ELO_AUS
+  SQ 0)
+  ELO_AUS
 
-ENDIF
+  ;Istwertuebergabe der aktuellen Position!
+   _XSTART=$AA_IM[X]      ;X-Istwertuebernahme
+   _YSTART=$AA_IM[Y]      ;Y-Istwertuebernahme
+   _ZSTART=$AA_IM[Z]      ;Z-Istwertuebernahme
+   _ZDSTART=$AA_IM[ZD]    ;ZD-Istwertuebernahme
 
-;Istwertuebergabe von der aktuellen Position!
-_XSTART=$AA_IM[X]      ;X-Istwertuebernahme
-_YSTART=$AA_IM[Y]      ;Y-Istwertuebernahme
-_ZSTART=$AA_IM[Z]      ;Z-Istwertuebernahme
-_ZDSTART=$AA_IM[ZD]    ;ZD-Istwertuebernahme
+RET
 
 
 ;--------EB-Figur laden------------
+VORBEREITUNG:
+  ;Parametrieren Hauptfigur
+  WRT(S_FIG,7,S_FRQ,3700,S_SWX,_SWXs,S_SWY,_SWYs)
+  SNS
+  VEKTOR_XY
 
-;Parametrieren Hauptfigur
-WRT(S_FIG,7,S_FRQ,3700,S_SWX,_SWXs,S_SWY,_SWYs)
-SNS
-VEKTOR_XY
+  ;Nullpunktverschiebung
+  G17 G55
+  TRANS X=_XSTART Y=_YSTART
 
-;Nullpunktverschiebung
-G17 G55
-TRANS X=_XSTART Y=_YSTART
-
-;---------------Hauptteil-------------------
-M00
-;Hier startet das Cura Programm
-    
+RET 

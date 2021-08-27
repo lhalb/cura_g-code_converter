@@ -289,12 +289,40 @@ def write_gcode(outpath, df, slopes=True,
 
     stringliste.insert(0, 'PROC PATHCODE (INT _DEST)\nGOTOF _DEST')
     stringliste.extend(['\nRET'])
+    stringliste.append(codes_for_up_and_downslope())
 
     with open(outpath, "w") as outfile:
         outfile.write("\n".join(stringliste))
 
     return stringliste
 
+def codes_for_up_and_downslope():
+    txt = """
+;---------------Upslope-------------------
+UPSLOPE:
+MSG("Beginn Layer n mit [Cycle Start]")
+M00
+MSG("Layer n wird aufgebaut")
+
+;Upslope und Draht foerdern
+G0 G90 SQ _SQH) SL _SLH)
+M61                    ;Draht ein                       
+G0 G90 VD2=(_vD) 
+G4 F _tups             ;Upslopefehler ausgleichen
+
+RET
+
+;---------------Downslope-------------------
+DOWNSLOPE:
+;Draht abstellen und Downslope ohne Z-Verfahrbefehl           
+
+G4 F _tdos             ;Downslopefehler ausgleichen
+M62                    ;Draht aus
+G0 G90 SQ 0) SL _SLb)  ;Strahlstrom aus
+
+RET
+    """
+    return txt
 
 def find_slope_indices(s):
     def has_neighbours(liste, el):
