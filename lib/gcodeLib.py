@@ -3,7 +3,7 @@ import pandas as pd
 import matplotlib.pyplot as plt
 
 
-def clear_data(path, start=";MESH", end=';TIME_ELAPSED', cut=None):
+def clear_data(path, start="M107", end='M82', cut=None):
     """
     
     :param path: Pfad zur G-Code-Datei
@@ -20,10 +20,18 @@ def clear_data(path, start=";MESH", end=';TIME_ELAPSED', cut=None):
     # finde den Startpunkt des G-Codes
     start_idx = [raw_lines.index(i) for i in raw_lines if start in i][0]
     # finde das Ende des G-Codes
-    end_idx = [raw_lines.index(i) for i in raw_lines if end in i][0]
+    end_idx = [raw_lines.index(i, start_idx) for i in raw_lines if end in i][0]
 
     # trimme die Daten
     cut_lines = raw_lines[start_idx+1: end_idx]
+
+    skirts = [i for i, x in enumerate(cut_lines) if x == ';TYPE:SKIRT']
+    outer_walls = [i for i, x in enumerate(cut_lines) if x == ';TYPE:WALL-OUTER']
+
+    if skirts:
+        print(skirts)
+        # falls es mehrere Skirtsa gibt, müsste man die Routine hier anpassen
+        del cut_lines[skirts[0]:outer_walls[0]]
 
     # lösche die Typenbezeichnungen
     if cut is None:
@@ -31,7 +39,9 @@ def clear_data(path, start=";MESH", end=';TIME_ELAPSED', cut=None):
     else:
         uncommented_lines = [i for i in cut_lines if all(c not in i for c in cut)]
 
-    return uncommented_lines
+    cleared_lines = [l for l in uncommented_lines if l != '']
+
+    return cleared_lines
 
 
 def import_data_pandas(path):
@@ -39,12 +49,13 @@ def import_data_pandas(path):
     return df
 
 
-def lines_to_array(lines, z_to_zd=False, r=0, offset=-0.5):
+def lines_to_array(lines, z_to_zd=False, r=0.5, offset=0):
     if z_to_zd:
         z_out = 'ZD'
     else:
         z_out = 'Z'
     possible_axes = {
+        'G': 'G',
         'X': 'X',
         'Y': 'Y',
         'Z': z_out,
@@ -67,10 +78,14 @@ def lines_to_array(lines, z_to_zd=False, r=0, offset=-0.5):
         if c != 'F':
             df[f'd{c}'] = np.ediff1d(df[c], to_begin=0)
 
+    df['CNC'] = lines
+
     df['PHI'] = np.arctan(df['dY']/df['dX'])
 
-    df['SV'] = r * np.sin(df['PHI']) + offset
-    df['SU'] = r * np.cos(df['PHI']) + offset
+    df['SV'] = np.round(r * np.sin(df['PHI']) + offset, 3)
+    df['SU'] = np.round(r * np.cos(df['PHI']) + offset, 3)
+
+    df = df.fillna(0)
 
     return df
 
@@ -80,15 +95,20 @@ def inspect_data(data, start=0, stop=-1):
     x = data.index[start:stop]
     y1 = data['dX'][start:stop]
     y2 = data['dY'][start:stop]
-    ax.plot(x, y1)
-    ax.plot(x, y2, 'g-')
+    ax.plot(x, y1, label='X-Werte')
+    ax.plot(x, y2, 'g-', label='Y-Werte')
     ax.set_ylabel('dX, dY')
 
     secax = ax.twinx()
     y3 = data['dG'][start:stop]
-    secax.scatter(x, y3, s=2, edgecolor='r')
+    secax.scatter(x, y3, s=2, edgecolor='r', label='G-Werte')
     secax.set_ylabel('dG')
     secax.set_ylim([-3, 3])
+
+    h1, l1 = ax.get_legend_handles_labels()
+    h2, l2 = secax.get_legend_handles_labels()
+
+    ax.legend(h1+h2, l1+l2)
 
     plt.show()
 
@@ -227,5 +247,90 @@ def write_header():
     return string
 
 
-def write_gcode(df):
-    return
+def get_jumpmarkers(s):
+    inds = []
+    for i in s.index:
+        if s[i] != 0:
+            inds.append(i)
+
+    return inds
+
+def write_gcode(outpath, df, slopes=True,
+                up_name='REPEAT UPSLOPE ENDLABEL', down_name='REPEAT DOWNSLOPE ENDLABEL',
+                marker_name='EB_PATH'):
+    def get_string(a, b, c, d, e):
+        if e != 0:
+            return f'G1 X={a} Y={b} SU={c} SV={d} Z={e}'
+        else:
+            return f'G1 X={a} Y={b} SU={c} SV={d}'
+
+    stringliste = [get_string(x, y, su, sv, z) for x, y, su, sv, z in zip(df['X'], df['Y'], df['SU'], df['SV'], df['Z'])]
+    jump_idx = get_jumpmarkers(df['Z'])
+    if slopes:
+        slope_pos, slope_label = find_slope_indices(df['E'].values)
+
+        corr_idx = 0
+        for idx in df.index:
+            for i, s in enumerate(slope_pos):
+                if idx == s:
+                    if slope_label[i] == 'UP':
+                        stringliste.insert(idx + 1 + corr_idx, up_name)
+                    else:
+                        stringliste.insert(idx + corr_idx, down_name)
+                    corr_idx += 1
+
+            for j, z in enumerate(jump_idx):
+                if idx == z:
+                    if j == 0:
+                        stringliste.insert(idx - 1 + corr_idx, f'{marker_name}_{j}:')
+                    else:
+                        stringliste.insert(idx - 1 + corr_idx, f'RET\n{marker_name}_{j}:')
+                    corr_idx += 1
+
+    stringliste.insert(0, 'PROC PATHCODE (INT _DEST)\nGOTOF _DEST')
+    stringliste.extend(['\nRET'])
+
+    with open(outpath, "w") as outfile:
+        outfile.write("\n".join(stringliste))
+
+    return stringliste
+
+
+def find_slope_indices(s):
+    def has_neighbours(liste, el):
+        if liste[el] - 1 in liste and liste[el] + 1 in liste:
+            return True
+        else:
+            return False
+
+    all_indices = list(np.where(s == 0)[0])
+
+    to_delete = []
+
+    for i, idx in enumerate(all_indices):
+        if has_neighbours(all_indices, i):
+            to_delete.append(idx)
+
+    for i in to_delete:
+        all_indices.remove(i)
+
+    slope_types = get_up_and_downslope_list(all_indices)
+
+    return all_indices, slope_types
+
+def get_up_and_downslope_list(slopelist):
+
+    if len(slopelist) %2 != 0:
+        print(f'Slopes bei: {slopelist}')
+        print('Es wird nicht mit einem Downslope geendet!\nDaten prüfen')
+        return
+    else:
+        outlist = ['DOWN'] * len(slopelist)
+
+        even_idx = [i for i in range(len(slopelist)) if (i % 2) == 0]
+
+        for i in even_idx:
+            outlist[i] = 'UP'
+
+        return outlist
+
