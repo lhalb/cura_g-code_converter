@@ -29,9 +29,8 @@ def clear_data(path, start="M107", end='M82', cut=None):
     outer_walls = [i for i, x in enumerate(cut_lines) if x == ';TYPE:WALL-OUTER']
 
     if skirts:
-        print(skirts)
-        # falls es mehrere Skirtsa gibt, müsste man die Routine hier anpassen
-        del cut_lines[skirts[0]:outer_walls[0]]
+        # falls es mehrere Skirts gibt, müsste man die Routine hier anpassen
+        del cut_lines[skirts[0]:(outer_walls[0]-1)]
 
     # lösche die Typenbezeichnungen
     if cut is None:
@@ -255,16 +254,16 @@ def get_jumpmarkers(s):
 
     return inds
 
-def write_gcode(outpath, df, slopes=True,
+def write_gcode(outpath, df, scaling=1, slopes=True,
                 up_name='REPEAT UPSLOPE ENDLABEL', down_name='REPEAT DOWNSLOPE ENDLABEL',
                 marker_name='EB_PATH'):
-    def get_string(a, b, c, d, e):
+    def get_string(a, b, c, d, e, sf=1):
         if e != 0:
-            return f'G1 X={a} Y={b} SU={c} SV={d} Z={e}'
+            return f'G1 X={round(sf*a, 3)} Y={round(sf*b, 3)} SU={c}'# SV={d}'# Z={e}'
         else:
-            return f'G1 X={a} Y={b} SU={c} SV={d}'
+            return f'G1 X={round(sf*a, 3)} Y={round(sf*b, 3)} SU={c}'# SV={d}'
 
-    stringliste = [get_string(x, y, su, sv, z) for x, y, su, sv, z in zip(df['X'], df['Y'], df['SU'], df['SV'], df['Z'])]
+    stringliste = [get_string(x, y, su, sv, z, scaling) for x, y, su, sv, z in zip(df['X'], df['Y'], df['SU'], df['SV'], df['Z'])]
     jump_idx = get_jumpmarkers(df['Z'])
     if slopes:
         slope_pos, slope_label = find_slope_indices(df['E'].values)
@@ -282,12 +281,12 @@ def write_gcode(outpath, df, slopes=True,
             for j, z in enumerate(jump_idx):
                 if idx == z:
                     if j == 0:
-                        stringliste.insert(idx - 1 + corr_idx, f'{marker_name}_{j}:')
+                        stringliste.insert(idx - 1 + corr_idx, f'{marker_name}_{j+1}:')
                     else:
-                        stringliste.insert(idx - 1 + corr_idx, f'RET\n{marker_name}_{j}:')
+                        stringliste.insert(idx - 1 + corr_idx, f'RET\n{marker_name}_{j+1}:')
                     corr_idx += 1
 
-    stringliste.insert(0, 'PROC PATHCODE (INT _DEST)\nGOTOF _DEST')
+    stringliste.insert(0, 'PROC PATHCODE (INT _N_LAB)\nDEF STRING[12] _DEST\n_DEST="EB_PATH_" << _N_LAB\nGOTOF _DEST')
     stringliste.extend(['\nRET'])
     stringliste.append(codes_for_up_and_downslope())
 
@@ -300,15 +299,14 @@ def codes_for_up_and_downslope():
     txt = """
 ;---------------Upslope-------------------
 UPSLOPE:
-MSG("Beginn Layer n mit [Cycle Start]")
+MSG("Weiter mit [Cycle Start]")
 M00
-MSG("Layer n wird aufgebaut")
 
 ;Upslope und Draht foerdern
 G0 G90 SQ _SQH) SL _SLH)
 M61                    ;Draht ein                       
 G0 G90 VD2=(_vD) 
-G4 F _tups             ;Upslopefehler ausgleichen
+G4 F0.25             ;Upslopefehler ausgleichen
 
 RET
 
@@ -316,7 +314,7 @@ RET
 DOWNSLOPE:
 ;Draht abstellen und Downslope ohne Z-Verfahrbefehl           
 
-G4 F _tdos             ;Downslopefehler ausgleichen
+G4 F0.25             ;Downslopefehler ausgleichen
 M62                    ;Draht aus
 G0 G90 SQ 0) SL _SLb)  ;Strahlstrom aus
 
